@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Model Predictor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; padding-top: 50px; }
+        .container { max-width: 700px; }
+        .card { border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .btn-primary { border-radius: 10px; padding: 10px 20px; }
+        #result { display: none; margin-top: 20px; }
+        .loading { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card p-4">
+            <h2 class="text-center mb-4">Supervised Learning Model UI</h2>
+            <p class="text-muted text-center">Enter text below to get a prediction from your scikit-learn pipeline.</p>
+            
+            <div class="mb-3">
+                <label for="inputText" class="form-label">Input Text</label>
+                <textarea class="form-control" id="inputText" rows="4" placeholder="Type something here..."></textarea>
+            </div>
+            
+            <div class="d-grid">
+                <button id="predictBtn" class="btn btn-primary">Predict</button>
+            </div>
+
+            <div class="text-center mt-3 loading">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+
+            <div id="result" class="alert alert-info">
+                <h5>Prediction Result:</h5>
+                <pre id="predictionOutput" class="mb-0"></pre>
+            </div>
+        </div>
+        
+        <div class="text-center mt-4">
+            <a href="/health" class="text-decoration-none text-muted small">System Health Check</a>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('predictBtn').addEventListener('click', async () => {
+            const text = document.getElementById('inputText').value;
+            const resultDiv = document.getElementById('result');
+            const output = document.getElementById('predictionOutput');
+            const loading = document.querySelector('.loading');
+            const btn = document.getElementById('predictBtn');
+
+            if (!text.trim()) {
+                alert("Please enter some text");
+                return;
+            }
+
+            // UI State
+            resultDiv.style.display = 'none';
+            loading.style.display = 'block';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    output.textContent = JSON.stringify(data.prediction, null, 2);
+                    resultDiv.className = "alert alert-success mt-3";
+                } else {
+                    output.textContent = data.error || "An error occurred";
+                    resultDiv.className = "alert alert-danger mt-3";
+                }
+                resultDiv.style.display = 'block';
+            } catch (error) {
+                output.textContent = "Error connecting to API";
+                resultDiv.className = "alert alert-danger mt-3";
+                resultDiv.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+                btn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
