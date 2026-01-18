@@ -3,42 +3,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Printer Assistant Bot</title>
+    <title>Printer Expert Assistant</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <!-- Marked.js for rendering Markdown from Gemini -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
-        body { background-color: #f0f2f5; height: 100vh; display: flex; flex-direction: column; }
-        .chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
-        .message { max-width: 80%; padding: 12px 16px; border-radius: 15px; position: relative; line-height: 1.5; }
-        .user-message { align-self: flex-end; background-color: #007bff; color: white; border-bottom-right-radius: 2px; }
-        .bot-message { align-self: flex-start; background-color: white; color: #333; border-bottom-left-radius: 2px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        :root {
+            --primary-color: #007bff;
+            --bg-color: #f0f2f5;
+            --bot-msg-bg: #ffffff;
+            --user-msg-bg: #007bff;
+        }
+        body { background-color: var(--bg-color); height: 100vh; display: flex; flex-direction: column; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .navbar { box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: smooth; }
+        
+        .message { max-width: 85%; padding: 12px 18px; border-radius: 18px; position: relative; font-size: 0.95rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .user-message { align-self: flex-end; background-color: var(--user-msg-bg); color: white; border-bottom-right-radius: 4px; }
+        .bot-message { align-self: flex-start; background-color: var(--bot-msg-bg); color: #333; border-bottom-left-radius: 4px; }
+        
+        /* Markdown styling inside messages */
+        .message-content p:last-child { margin-bottom: 0; }
+        .message-content ul, .message-content ol { padding-left: 20px; margin-bottom: 10px; }
+        
         .input-area { background: white; padding: 20px; border-top: 1px solid #dee2e6; }
-        .typing-indicator { font-style: italic; color: #6c757d; font-size: 0.9rem; display: none; }
-        .attribute-tag { font-size: 0.75rem; background: #e9ecef; padding: 2px 8px; border-radius: 10px; margin-right: 5px; }
-        pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; margin-bottom: 0; }
+        .input-group { background: #f8f9fa; border-radius: 25px; padding: 5px 15px; border: 1px solid #ced4da; }
+        .input-group input { border: none; background: transparent; padding: 10px; box-shadow: none !important; }
+        .input-group button { border-radius: 50% !important; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; margin-left: 5px; }
+
+        /* Typing Indicator Styling */
+        .typing { align-self: flex-start; background-color: var(--bot-msg-bg); padding: 12px 18px; border-radius: 18px; border-bottom-left-radius: 4px; display: none; }
+        .dot { height: 8px; width: 8px; background-color: #bbb; border-radius: 50%; display: inline-block; margin-right: 3px; animation: jump 1.4s infinite ease-in-out both; }
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes jump {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
     </style>
 </head>
 <body>
     <nav class="navbar navbar-dark bg-primary">
-        <div class="container-fluid">
+        <div class="container">
             <span class="navbar-brand mb-0 h1"><i class="bi bi-printer-fill me-2"></i>Printer Expert Assistant</span>
-            <span class="badge bg-light text-primary">GenAI Powered</span>
         </div>
     </nav>
 
     <div class="chat-container" id="chatContainer">
         <div class="message bot-message">
-            Hello! I'm your Printer Expert. Tell me what you're looking for in a printer (e.g., "I need a wireless printer for my home office under $300"), and I'll find the best matches from our catalog!
+            <div class="message-content">
+                Hello! I'm your Printer Expert. Tell me what you're looking for in a printer, and I'll find the best matches from our catalog!
+            </div>
+        </div>
+        <!-- Typing indicator placeholder -->
+        <div id="typingIndicator" class="typing">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
         </div>
     </div>
 
     <div class="input-area">
         <div class="container">
-            <div id="typing" class="typing-indicator mb-2">Assistant is thinking...</div>
             <div class="input-group">
-                <input type="text" id="userInput" class="form-control" placeholder="Type your message here..." aria-label="User message">
+                <input type="text" id="userInput" class="form-control" placeholder="Ask about a printer..." autocomplete="off">
                 <button class="btn btn-primary" type="button" id="sendBtn">
-                    <i class="bi bi-send"></i>
+                    <i class="bi bi-send-fill"></i>
                 </button>
             </div>
         </div>
@@ -48,27 +79,30 @@
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
-        const typingIndicator = document.getElementById('typing');
+        const typingIndicator = document.getElementById('typingIndicator');
         
         let chatHistory = [];
 
-        function appendMessage(role, content, attributes = null) {
+        function appendMessage(role, content) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${role}-message`;
             
-            let html = `<pre>${content}</pre>`;
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
             
-            if (attributes && attributes.length > 0) {
-                html += '<div class="mt-2 border-top pt-1">';
-                html += '<small class="text-muted d-block mb-1">Detected Intent:</small>';
-                attributes.forEach(attr => {
-                    html += `<span class="attribute-tag">${attr}</span>`;
-                });
-                html += '</div>';
+            // Use marked.js to render markdown for bot messages
+            if (role === 'bot') {
+                contentDiv.innerHTML = marked.parse(content);
+            } else {
+                contentDiv.textContent = content;
             }
             
-            msgDiv.innerHTML = html;
-            chatContainer.appendChild(msgDiv);
+            msgDiv.appendChild(contentDiv);
+            
+            // Insert before the typing indicator
+            chatContainer.insertBefore(msgDiv, typingIndicator);
+            
+            // Scroll to bottom
             chatContainer.scrollTop = chatContainer.scrollHeight;
             
             // Update history
@@ -82,7 +116,9 @@
             userInput.value = '';
             appendMessage('user', message);
             
+            // Show typing indicator at the bottom
             typingIndicator.style.display = 'block';
+            chatContainer.scrollTop = chatContainer.scrollHeight;
             
             try {
                 const response = await fetch('/chat', {
@@ -90,7 +126,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         message: message,
-                        history: chatHistory.slice(0, -1) // Send history excluding the message we just added
+                        history: chatHistory.slice(0, -1)
                     })
                 });
 
@@ -98,13 +134,13 @@
                 typingIndicator.style.display = 'none';
 
                 if (data.response) {
-                    appendMessage('bot', data.response, data.attributes);
+                    appendMessage('bot', data.response);
                 } else {
-                    appendMessage('bot', "Sorry, I encountered an error. Please try again.");
+                    appendMessage('bot', "I'm sorry, I encountered an error. Please try again.");
                 }
             } catch (error) {
                 typingIndicator.style.display = 'none';
-                appendMessage('bot', "Connection error. Is the server running?");
+                appendMessage('bot', "Connection error. Please check your internet or server status.");
             }
         }
 
