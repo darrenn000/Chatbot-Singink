@@ -1,7 +1,8 @@
 import os
 import joblib
 import pandas as pd
-from flask import Flask, request, jsonify, render_template
+import json
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -44,60 +45,69 @@ def load_resources():
             print(f"Error loading catalog: {e}")
 
 # --- Helper Functions ---
-def get_gemini_recommendation(user_input, predicted_attributes, chat_history):
+def generate_streaming_response(user_input, predicted_attributes, chat_history):
     """
-    Calls Gemini using the official Google SDK to provide a recommendation.
-    Uses the cleaned catalog columns for better context.
+    Generator function that yields chunks of text from Gemini.
     """
     if not api_key:
-        return "API Key is missing. Please configure GEMINI_API_KEY in your environment."
+        yield "data: " + json.dumps({"error": "API Key is missing"}) + "\n\n"
+        return
 
-    # Filter for only Printers to keep the context focused, but keep other categories available if needed
+    # Filter for only Printers
     printers_only = printer_catalog[printer_catalog['category'] == 'Printer']
-    
-    # Prepare catalog context using cleaned columns
-    # We use 'title', 'price_cleaned', and 'details_cleaned' for the most relevant info
-    catalog_context = printers_only[['title', 'price_cleaned', 'details_cleaned']].to_string(index=False)
+    catalog_context = printers_only[['title', 'price_cleaned', 'details_cleaned', 'image_url']].to_string(index=False)
     
     system_instruction = f"""
-    You are an expert Printer Recommendation Assistant. 
-    Your goal is to help users find the perfect printer from our catalog.
+    You are a fast, efficient Printer Expert. 
     
-    OUR PRINTER CATALOG (Cleaned Data):
+    PRIORITY LOGIC:
+    1. If the user's request is vague (e.g., missing budget, specific features, or volume needs), DO NOT recommend products yet. Instead, ask ONE short, targeted follow-up question to clarify.
+    2. If you have enough info, recommend exactly 2 printers from the catalog below.
+    
+    CATALOG:
     {catalog_context}
     
-    USER ANALYSIS (from our classifier):
-    The user's intent suggests these attributes: {predicted_attributes}
+    USER INTENT HINTS: {predicted_attributes}
     
-    INSTRUCTIONS:
-    1. Use the predicted attributes and the user's message to filter the catalog.
-    2. Recommend 2-3 specific printers that best match their needs.
-    3. Use the 'price_cleaned' field for accurate pricing information.
-    4. Explain WHY you are recommending them based on their features found in 'details_cleaned'.
-    5. If the user's intent is unclear (e.g. missing budget or specific feature needs), ask ONE targeted follow-up question.
-    6. Be conversational, professional, and helpful.
+    RESPONSE RULES:
+    - Be extremely concise to ensure fast response speed.
+    - For recommendations, use: ![Product Image](IMAGE_URL)
+    - Explain the "Why" in one sentence.
+    - If clarifying, be polite but brief.
     """
     
     try:
-        # Initialize the model
+        generation_config = {
+            "temperature": 0.2,
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_output_tokens": 512,
+        }
+
         gemini_model = genai.GenerativeModel(
             model_name="gemini-2.5-flash",
-            system_instruction=system_instruction
+            system_instruction=system_instruction,
+            generation_config=generation_config
         )
         
-        # Convert chat history to Google's format
         formatted_history = []
         for msg in chat_history:
             role = 'user' if msg['role'] == 'user' else 'model'
             formatted_history.append({'role': role, 'parts': [msg['content']]})
             
         chat = gemini_model.start_chat(history=formatted_history)
-        response = chat.send_message(user_input)
         
-        return response.text
+        # Use stream=True for real-time response
+        response = chat.send_message(user_input, stream=True)
+        
+        for chunk in response:
+            if chunk.text:
+                # Send as Server-Sent Events (SSE)
+                yield f"data: {json.dumps({'text': chunk.text})}\n\n"
+                
     except Exception as e:
-        print(f"Gemini SDK Error: {e}")
-        return "I'm sorry, I'm having trouble connecting to my recommendation engine. Please check the API key configuration."
+        print(f"Gemini Streaming Error: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 # --- Routes ---
 @app.route('/', methods=['GET'])
@@ -113,35 +123,28 @@ def chat():
     if not user_message:
         return jsonify({"error": "No message provided"}), 400
         
-    # 1. Predict attributes using the scikit-learn model
     predicted_attributes = []
     if model:
         try:
             prediction = model.predict([user_message])
-            # In a real scenario, you'd map these to human-readable labels
             predicted_attributes = prediction.tolist()
         except Exception as e:
             print(f"Prediction error: {e}")
     
-    # 2. Get recommendation from Gemini
-    bot_response = get_gemini_recommendation(user_message, predicted_attributes, chat_history)
-    
-    return jsonify({
-        "response": bot_response,
-        "attributes": predicted_attributes
-    })
+    # Return a streaming response
+    return Response(
+        stream_with_context(generate_streaming_response(user_message, predicted_attributes, chat_history)),
+        mimetype='text/event-stream'
+    )
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         "status": "healthy",
         "classifier_loaded": model is not None,
-        "catalog_loaded": printer_catalog is not None,
-        "api_key_configured": api_key is not None,
-        "catalog_rows": len(printer_catalog) if printer_catalog is not None else 0
+        "catalog_loaded": printer_catalog is not None
     })
 
-# Initialize resources
 load_resources()
 
 if __name__ == '__main__':

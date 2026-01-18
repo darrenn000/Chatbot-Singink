@@ -6,7 +6,6 @@
     <title>Printer Expert Assistant</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-    <!-- Marked.js for rendering Markdown from Gemini -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
@@ -23,35 +22,20 @@
         .user-message { align-self: flex-end; background-color: var(--user-msg-bg); color: white; border-bottom-right-radius: 4px; }
         .bot-message { align-self: flex-start; background-color: var(--bot-msg-bg); color: #333; border-bottom-left-radius: 4px; }
         
-        /* Markdown styling inside messages */
         .message-content p:last-child { margin-bottom: 0; }
         .message-content ul, .message-content ol { padding-left: 20px; margin-bottom: 10px; }
-        
-        /* Product Image Styling */
-        .message-content img { 
-            max-width: 100%; 
-            height: auto; 
-            border-radius: 10px; 
-            margin: 10px 0; 
-            display: block; 
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            border: 1px solid #eee;
-        }
+        .message-content img { max-width: 100%; height: auto; border-radius: 10px; margin: 10px 0; display: block; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #eee; }
         
         .input-area { background: white; padding: 20px; border-top: 1px solid #dee2e6; }
         .input-group { background: #f8f9fa; border-radius: 25px; padding: 5px 15px; border: 1px solid #ced4da; }
         .input-group input { border: none; background: transparent; padding: 10px; box-shadow: none !important; }
         .input-group button { border-radius: 50% !important; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; margin-left: 5px; }
 
-        /* Typing Indicator Styling */
         .typing { align-self: flex-start; background-color: var(--bot-msg-bg); padding: 12px 18px; border-radius: 18px; border-bottom-left-radius: 4px; display: none; }
         .dot { height: 8px; width: 8px; background-color: #bbb; border-radius: 50%; display: inline-block; margin-right: 3px; animation: jump 1.4s infinite ease-in-out both; }
         .dot:nth-child(1) { animation-delay: -0.32s; }
         .dot:nth-child(2) { animation-delay: -0.16s; }
-        @keyframes jump {
-            0%, 80%, 100% { transform: scale(0); }
-            40% { transform: scale(1.0); }
-        }
+        @keyframes jump { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.0); } }
     </style>
 </head>
 <body>
@@ -94,30 +78,14 @@
         
         let chatHistory = [];
 
-        function appendMessage(role, content) {
+        function createMessageElement(role) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${role}-message`;
-            
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
-            
-            // Use marked.js to render markdown for bot messages
-            if (role === 'bot') {
-                contentDiv.innerHTML = marked.parse(content);
-            } else {
-                contentDiv.textContent = content;
-            }
-            
             msgDiv.appendChild(contentDiv);
-            
-            // Insert before the typing indicator
             chatContainer.insertBefore(msgDiv, typingIndicator);
-            
-            // Scroll to bottom
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-            
-            // Update history
-            chatHistory.push({ role: role === 'user' ? 'user' : 'assistant', content: content });
+            return contentDiv;
         }
 
         async function sendMessage() {
@@ -125,9 +93,13 @@
             if (!message) return;
 
             userInput.value = '';
-            appendMessage('user', message);
             
-            // Show typing indicator at the bottom
+            // Render User Message
+            const userContentDiv = createMessageElement('user');
+            userContentDiv.textContent = message;
+            chatHistory.push({ role: 'user', content: message });
+            
+            // Show typing indicator
             typingIndicator.style.display = 'block';
             chatContainer.scrollTop = chatContainer.scrollHeight;
             
@@ -141,17 +113,48 @@
                     })
                 });
 
-                const data = await response.json();
-                typingIndicator.style.display = 'none';
+                if (!response.ok) throw new Error('Network response was not ok');
 
-                if (data.response) {
-                    appendMessage('bot', data.response);
-                } else {
-                    appendMessage('bot', "I'm sorry, I encountered an error. Please try again.");
+                // Prepare for streaming
+                typingIndicator.style.display = 'none';
+                const botContentDiv = createMessageElement('bot');
+                let fullBotResponse = "";
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.text) {
+                                    fullBotResponse += data.text;
+                                    // Render markdown in real-time
+                                    botContentDiv.innerHTML = marked.parse(fullBotResponse);
+                                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                                } else if (data.error) {
+                                    botContentDiv.textContent = "Error: " + data.error;
+                                }
+                            } catch (e) {
+                                console.error("Error parsing SSE data", e);
+                            }
+                        }
+                    }
                 }
+                
+                chatHistory.push({ role: 'assistant', content: fullBotResponse });
+
             } catch (error) {
                 typingIndicator.style.display = 'none';
-                appendMessage('bot', "Connection error. Please check your internet or server status.");
+                const errorDiv = createMessageElement('bot');
+                errorDiv.textContent = "Connection error. Please check your status.";
             }
         }
 
