@@ -3,3 +3,6 @@ joblib
 scikit-learn
 gunicorn
 numpy
+pandas
+google-generativeai
+python-dotenv
