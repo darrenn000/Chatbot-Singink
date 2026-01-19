@@ -5,6 +5,7 @@ import json
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 import google.generativeai as genai
 from dotenv import load_dotenv
+import re
 
 # Load environment variables from .env file if it exists
 load_dotenv()
@@ -45,43 +46,96 @@ def load_resources():
             print(f"Error loading catalog: {e}")
 
 # --- Helper Functions ---
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", str(s).lower()).strip()
+
+def select_candidates(user_message: str, catalog_df: pd.DataFrame, k: int = 12) -> pd.DataFrame:
+    """
+    Cheap Top-K retrieval to avoid sending the full catalog to Gemini.
+    """
+    df = catalog_df[catalog_df["category"] == "Printer"].copy()
+    msg = _norm(user_message)
+
+    # Heuristic boosts (optional but useful)
+    if any(w in msg for w in ["wireless", "wifi", "wi-fi"]):
+        df["_wireless"] = df["details_cleaned"].fillna("").str.lower().str.contains("wifi|wi-fi|wireless")
+        df = df.sort_values("_wireless", ascending=False)
+
+    if any(w in msg for w in ["duplex", "double-sided", "double sided"]):
+        df["_duplex"] = df["details_cleaned"].fillna("").str.lower().str.contains("duplex|double[- ]sided")
+        df = df.sort_values("_duplex", ascending=False)
+
+    # Relevance scoring
+    terms = [t for t in re.findall(r"[a-z0-9]+", msg) if len(t) >= 3][:10]
+    text = (df["title"].fillna("") + " " + df["details_cleaned"].fillna("")).str.lower()
+
+    df["_score"] = 0
+    for t in terms:
+        df["_score"] += text.str.count(re.escape(t))
+
+    return df.sort_values("_score", ascending=False).head(k)
+
+def pack_products(df: pd.DataFrame) -> list:
+    """
+    Hard-trim product text to control tokens.
+    """
+    packed = []
+    for _, r in df.iterrows():
+        packed.append({
+            "title": str(r.get("title", ""))[:120],
+            "price": r.get("price_cleaned", None),
+            "details": str(r.get("details_cleaned", ""))[:260],   # IMPORTANT: truncate
+            "image_url": r.get("image_url", ""),
+        })
+    return packed
+
+
 def generate_streaming_response(user_input, predicted_attributes, chat_history):
     """
     Generator function that yields chunks of text from Gemini.
+    Token-optimized: retrieve Top-K candidates, send only those.
     """
     if not api_key:
         yield "data: " + json.dumps({"error": "API Key is missing"}) + "\n\n"
         return
 
-    # Filter for only Printers
-    printers_only = printer_catalog[printer_catalog['category'] == 'Printer']
-    catalog_context = printers_only[['title', 'price_cleaned', 'details_cleaned', 'image_url']].to_string(index=False)
-    
-    system_instruction = f"""
-    You are a fast, efficient Printer Expert. 
-    
-    PRIORITY LOGIC:
-    1. If the user's request is vague (e.g., missing budget, specific features, or volume needs), DO NOT recommend products yet. Instead, ask ONE short, targeted follow-up question to clarify.
-    2. If you have enough info, recommend exactly 2 printers from the catalog below.
-    
-    CATALOG:
-    {catalog_context}
-    
-    USER INTENT HINTS: {predicted_attributes}
-    
-    RESPONSE RULES:
-    - Be extremely concise to ensure fast response speed.
-    - For recommendations, use: ![Product Image](IMAGE_URL)
-    - Explain the "Why" in one sentence.
-    - If clarifying, be polite but brief.
-    """
-    
+    # Safety: if catalog not loaded
+    if printer_catalog is None or printer_catalog.empty:
+        yield "data: " + json.dumps({"error": "Catalog not loaded"}) + "\n\n"
+        return
+
+    # 1) Trim history (do NOT resend everything forever)
+    chat_history = (chat_history or [])[-4:]
+
+    # 2) Retrieve Top-K candidates instead of full catalog
+    candidates_df = select_candidates(user_input, printer_catalog, k=12)
+    candidates = pack_products(candidates_df)
+
+    # 3) Tiny system instruction (no catalog inside)
+    system_instruction = (
+        "You are a Printer Recommendation Formatter.\n"
+        "Given user message + predicted attributes + candidate list:\n"
+        "If info missing, ask exactly ONE short follow-up question.\n"
+        "Otherwise recommend exactly 2 products from candidates.\n"
+        "Output format:\n"
+        "- If clarify: one short question only.\n"
+        "- If recommend: for each product include: ![Product Image](IMAGE_URL) then 1-sentence why.\n"
+        "Be concise. Do not mention candidates list."
+    )
+
+    # 4) Send compact JSON payload to Gemini
+    payload = {
+        "user_message": user_input[:800],  # hard cap user text
+        "predicted_attributes": predicted_attributes,
+        "candidates": candidates
+    }
+
     try:
         generation_config = {
             "temperature": 0.2,
             "top_p": 0.95,
             "top_k": 40,
-            "max_output_tokens": 512,
+            "max_output_tokens": 250,  # reduced from 512
         }
 
         gemini_model = genai.GenerativeModel(
@@ -89,22 +143,24 @@ def generate_streaming_response(user_input, predicted_attributes, chat_history):
             system_instruction=system_instruction,
             generation_config=generation_config
         )
-        
+
         formatted_history = []
         for msg in chat_history:
             role = 'user' if msg['role'] == 'user' else 'model'
-            formatted_history.append({'role': role, 'parts': [msg['content']]})
-            
+            formatted_history.append({'role': role, 'parts': [msg['content'][:800]]})
+
         chat = gemini_model.start_chat(history=formatted_history)
-        
-        # Use stream=True for real-time response
-        response = chat.send_message(user_input, stream=True)
-        
+
+        # IMPORTANT: send payload, not raw user text
+        response = chat.send_message(
+            json.dumps(payload, separators=(",", ":")),
+            stream=True
+        )
+
         for chunk in response:
             if chunk.text:
-                # Send as Server-Sent Events (SSE)
                 yield f"data: {json.dumps({'text': chunk.text})}\n\n"
-                
+
     except Exception as e:
         print(f"Gemini Streaming Error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
