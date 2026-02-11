@@ -1,208 +1,151 @@
 import os
+import json
 import joblib
 import pandas as pd
-import json
+import requests
+from datetime import datetime
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+from werkzeug.utils import secure_filename
 import google.generativeai as genai
 from dotenv import load_dotenv
-import re
 
-# Load environment variables from .env file if it exists
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
 # --- Configuration ---
-MODEL_PATH = "attribute_lr_best_pipeline.joblib"
-CATALOG_PATH = "fully_cleaned_catalog.csv"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
+MODEL_PATH = os.path.join(BASE_DIR, "attribute_lr_best_pipeline.joblib")
+CATALOG_PATH = os.path.join(BASE_DIR, "fully_cleaned_catalog.csv")
 
-# Configure Google Generative AI
+# Hugging Face Configuration
+HF_API_URL = os.environ.get("HF_API_URL") # e.g., https://api-inference.huggingface.co/models/your-username/your-model
+HF_TOKEN = os.environ.get("HF_TOKEN")     # Your HF Access Token
+
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 # 10MB limit
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Configure Gemini
 api_key = os.environ.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
-else:
-    print("WARNING: GEMINI_API_KEY not found in environment variables.")
 
-# --- Global Variables ---
-model = None
-printer_catalog = None
+# --- Global Resources ---
+text_model = None
+text_catalog = None
 
 def load_resources():
-    global model, printer_catalog
-    # Load scikit-learn model
-    if os.path.exists(MODEL_PATH):
-        try:
-            model = joblib.load(MODEL_PATH)
-            print("Classifier model loaded successfully.")
-        except Exception as e:
-            print(f"Error loading classifier: {e}")
+    global text_model, text_catalog
     
-    # Load printer catalog
+    # Load SM2 Text Resources
+    if os.path.exists(MODEL_PATH):
+        text_model = joblib.load(MODEL_PATH)
+        print("SM2 Classifier loaded.")
     if os.path.exists(CATALOG_PATH):
-        try:
-            printer_catalog = pd.read_csv(CATALOG_PATH)
-            print(f"Loaded {len(printer_catalog)} products from cleaned catalog.")
-        except Exception as e:
-            print(f"Error loading catalog: {e}")
+        text_catalog = pd.read_csv(CATALOG_PATH)
+        print("Product catalog loaded.")
 
-# --- Helper Functions ---
-def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", str(s).lower()).strip()
-
-def select_candidates(user_message: str, catalog_df: pd.DataFrame, k: int = 12) -> pd.DataFrame:
-    """
-    Cheap Top-K retrieval to avoid sending the full catalog to Gemini.
-    """
-    df = catalog_df[catalog_df["category"] == "Printer"].copy()
-    msg = _norm(user_message)
-
-    # Heuristic boosts (optional but useful)
-    if any(w in msg for w in ["wireless", "wifi", "wi-fi"]):
-        df["_wireless"] = df["details_cleaned"].fillna("").str.lower().str.contains("wifi|wi-fi|wireless")
-        df = df.sort_values("_wireless", ascending=False)
-
-    if any(w in msg for w in ["duplex", "double-sided", "double sided"]):
-        df["_duplex"] = df["details_cleaned"].fillna("").str.lower().str.contains("duplex|double[- ]sided")
-        df = df.sort_values("_duplex", ascending=False)
-
-    # Relevance scoring
-    terms = [t for t in re.findall(r"[a-z0-9]+", msg) if len(t) >= 3][:10]
-    text = (df["title"].fillna("") + " " + df["details_cleaned"].fillna("")).str.lower()
-
-    df["_score"] = 0
-    for t in terms:
-        df["_score"] += text.str.count(re.escape(t))
-
-    return df.sort_values("_score", ascending=False).head(k)
-
-def pack_products(df: pd.DataFrame) -> list:
-    """
-    Hard-trim product text to control tokens.
-    """
-    packed = []
-    for _, r in df.iterrows():
-        packed.append({
-            "title": str(r.get("title", ""))[:120],
-            "price": r.get("price_cleaned", None),
-            "details": str(r.get("details_cleaned", ""))[:260],   # IMPORTANT: truncate
-            "image_url": r.get("image_url", ""),
-        })
-    return packed
-
-
+# --- SM2 Text Chat Logic ---
 def generate_streaming_response(user_input, predicted_attributes, chat_history):
-    """
-    Generator function that yields chunks of text from Gemini.
-    Token-optimized: retrieve Top-K candidates, send only those.
-    """
     if not api_key:
-        yield "data: " + json.dumps({"error": "API Key is missing"}) + "\n\n"
+        yield f"data: {json.dumps({'error': 'API Key missing'})}\n\n"
         return
 
-    # Safety: if catalog not loaded
-    if printer_catalog is None or printer_catalog.empty:
-        yield "data: " + json.dumps({"error": "Catalog not loaded"}) + "\n\n"
-        return
-
-    # 1) Trim history (do NOT resend everything forever)
-    chat_history = (chat_history or [])[-4:]
-
-    # 2) Retrieve Top-K candidates instead of full catalog
-    candidates_df = select_candidates(user_input, printer_catalog, k=12)
-    candidates = pack_products(candidates_df)
-
-    # 3) Tiny system instruction (no catalog inside)
-    system_instruction = (
-        "You are a Printer Recommendation Formatter.\n"
-        "Given user message + predicted attributes + candidate list:\n"
-        "If info missing, ask exactly ONE short follow-up question.\n"
-        "Otherwise recommend exactly 2 products from candidates.\n"
-        "Output format:\n"
-        "- If clarify: one short question only.\n"
-        "- If recommend: for each product include: ![Product Image](IMAGE_URL) then 1-sentence why.\n"
-        "Be concise. Do not mention candidates list."
-    )
-
-    # 4) Send compact JSON payload to Gemini
-    payload = {
-        "user_message": user_input[:800],  # hard cap user text
-        "predicted_attributes": predicted_attributes,
-        "candidates": candidates
-    }
-
+    # Filter for printers to provide context to Gemini
+    if text_catalog is not None:
+        printers_only = text_catalog[text_catalog['category'] == 'Printer']
+        catalog_context = printers_only[['title', 'price_cleaned', 'details_cleaned', 'image_url']].head(15).to_string(index=False)
+    else:
+        catalog_context = "Catalog not available."
+    
+    system_instruction = f"""
+    You are a fast, efficient Printer Expert. 
+    PRIORITY: If vague, ask ONE short follow-up. If clear, recommend 2 printers.
+    CATALOG: {catalog_context}
+    USER INTENT HINTS: {predicted_attributes}
+    RULES: Concise. Use ![Product Image](IMAGE_URL). Explain 'Why' in one sentence.
+    """
+    
     try:
-        generation_config = {
-            "temperature": 0.2,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_output_tokens": 250,  # reduced from 512
-        }
-
-        gemini_model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash-lite",
-            system_instruction=system_instruction,
-            generation_config=generation_config
-        )
-
-        formatted_history = []
-        for msg in chat_history:
-            role = 'user' if msg['role'] == 'user' else 'model'
-            formatted_history.append({'role': role, 'parts': [msg['content'][:800]]})
-
+        gemini_model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=system_instruction)
+        formatted_history = [{'role': 'user' if m['role'] == 'user' else 'model', 'parts': [m['content']]} for m in chat_history]
         chat = gemini_model.start_chat(history=formatted_history)
-
-        # IMPORTANT: send payload, not raw user text
-        response = chat.send_message(
-            json.dumps(payload, separators=(",", ":")),
-            stream=True
-        )
-
+        response = chat.send_message(user_input, stream=True)
         for chunk in response:
             if chunk.text:
                 yield f"data: {json.dumps({'text': chunk.text})}\n\n"
-
     except Exception as e:
-        print(f"Gemini Streaming Error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-# --- Routes ---
-@app.route('/', methods=['GET'])
-def index():
-    return render_template('index.html')
+# --- SM4 Visual Search Logic (Remote via Hugging Face) ---
+def search_visual_catalog_remote(img_path):
+    if not HF_API_URL:
+        return {"ok": False, "error": "Hugging Face API URL not configured."}
+    
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    
+    try:
+        with open(img_path, "rb") as f:
+            # Note: This assumes the HF Space expects a file upload and returns JSON results
+            # You might need to adjust this based on how your teammate's Space is set up
+            response = requests.post(HF_API_URL, headers=headers, files={"file": f}, timeout=30)
+            
+        if response.status_code == 200:
+            return {"ok": True, "data": response.json()}
+        else:
+            return {"ok": False, "error": f"HF API Error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-@app.route('/chat', methods=['POST'])
+# --- Routes ---
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json()
     user_message = data.get('message', '')
     chat_history = data.get('history', [])
     
-    if not user_message:
-        return jsonify({"error": "No message provided"}), 400
-        
     predicted_attributes = []
-    if model:
+    if text_model:
         try:
-            prediction = model.predict([user_message])
+            prediction = text_model.predict([user_message])
             predicted_attributes = prediction.tolist()
-        except Exception as e:
-            print(f"Prediction error: {e}")
+        except:
+            predicted_attributes = ["Error in classification"]
     
-    # Return a streaming response
-    return Response(
-        stream_with_context(generate_streaming_response(user_message, predicted_attributes, chat_history)),
-        mimetype='text/event-stream'
-    )
+    return Response(stream_with_context(generate_streaming_response(user_message, predicted_attributes, chat_history)), mimetype='text/event-stream')
 
-@app.route('/health', methods=['GET'])
-def health():
+@app.route("/api/search", methods=["POST"])
+def api_search():
+    file = request.files.get("image")
+    if not file:
+        return jsonify({"ok": False, "error": "No file uploaded"}), 400
+
+    safe_name = secure_filename(file.filename)
+    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}")
+    file.save(saved_path)
+
+    # Call the remote Hugging Face API
+    hf_result = search_visual_catalog_remote(saved_path)
+    
+    if not hf_result["ok"]:
+        return jsonify({"ok": False, "error": hf_result["error"]}), 500
+
+    # Return the results from Hugging Face to the frontend
+    # This assumes the HF Space returns a structure similar to what the UI expects
     return jsonify({
-        "status": "healthy",
-        "classifier_loaded": model is not None,
-        "catalog_loaded": printer_catalog is not None
+        "ok": True,
+        "query_image_url": f"/static/uploads/{os.path.basename(saved_path)}",
+        "hf_data": hf_result["data"] # Pass the raw HF data to the frontend
     })
 
 load_resources()
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
