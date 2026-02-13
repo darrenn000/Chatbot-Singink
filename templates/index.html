@@ -26,12 +26,13 @@
         
         /* Visual Search Modal */
         #visualSearchModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; }
-        .modal-content { background: #1c1c1c; color: white; padding: 30px; border-radius: 20px; width: 90%; max-width: 600px; text-align: center; }
-        .preview-box { border: 2px dashed #555; border-radius: 15px; padding: 20px; margin: 20px 0; min-height: 200px; display: flex; align-items: center; justify-content: center; }
-        .preview-box img { max-width: 100%; max-height: 300px; border-radius: 10px; }
-        .results-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 20px; max-height: 300px; overflow-y: auto; }
-        .result-item { background: #2a2a2a; padding: 10px; border-radius: 10px; font-size: 0.8rem; }
-        .result-item img { width: 100%; height: 100px; object-fit: contain; background: white; border-radius: 5px; }
+        .modal-content { background: #1c1c1c; color: white; padding: 30px; border-radius: 20px; width: 90%; max-width: 800px; text-align: center; max-height: 90vh; overflow-y: auto; }
+        .preview-box { border: 2px dashed #555; border-radius: 15px; padding: 20px; margin: 20px 0; min-height: 150px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .preview-box img { max-width: 100%; max-height: 200px; border-radius: 10px; }
+        .results-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-top: 20px; }
+        .result-item { background: #2a2a2a; padding: 10px; border-radius: 10px; font-size: 0.8rem; text-align: left; }
+        .result-item img { width: 100%; height: 120px; object-fit: contain; background: white; border-radius: 5px; margin-bottom: 8px; }
+        .ai-explanation { background: #333; padding: 15px; border-radius: 10px; margin-top: 20px; text-align: left; font-size: 0.9rem; border-left: 4px solid var(--primary-color); }
     </style>
 </head>
 <body>
@@ -47,7 +48,7 @@
     <div class="input-area">
         <div class="container">
             <div class="input-group">
-                <button class="btn-icon" onclick="openVisualSearch()"><i class="bi bi-camera-fill"></i></button>
+                <button class="btn-icon" onclick="openVisualSearch()" title="Visual Search"><i class="bi bi-camera-fill"></i></button>
                 <input type="text" id="userInput" class="form-control" placeholder="Ask about a printer..." autocomplete="off">
                 <button class="btn btn-primary rounded-circle" id="sendBtn" style="width:40px; height:40px;"><i class="bi bi-send-fill"></i></button>
             </div>
@@ -57,18 +58,31 @@
     <!-- Visual Search Modal -->
     <div id="visualSearchModal">
         <div class="modal-content">
-            <h3>Visual Search</h3>
-            <p>Upload an image to find similar Singink products.</p>
+            <div class="d-flex justify-content-between align-items-center">
+                <h3>Visual Search</h3>
+                <button class="btn-close btn-close-white" onclick="closeVisualSearch()"></button>
+            </div>
+            <p class="text-muted">Upload an image to find similar Singink products via SM4.</p>
             <div class="preview-box" id="previewBox">
                 <span id="previewPlaceholder">Click to upload or paste image</span>
                 <img id="previewImg" style="display:none;">
             </div>
             <input type="file" id="fileInput" style="display:none;" accept="image/*">
-            <div id="visualStatus" class="mt-2"></div>
-            <div class="results-grid" id="resultsGrid"></div>
+            
+            <div id="visualLoading" style="display:none;" class="my-3">
+                <div class="spinner-border text-primary" role="status"></div>
+                <div class="mt-2">Analyzing image on Hugging Face...</div>
+            </div>
+
+            <div id="visualResults" style="display:none;">
+                <h5 id="visualPrediction" class="text-primary mb-3"></h5>
+                <div class="results-grid" id="resultsGrid"></div>
+                <div class="ai-explanation" id="aiExplanation"></div>
+            </div>
+
             <div class="mt-4">
-                <button class="btn btn-outline-light" onclick="closeVisualSearch()">Close</button>
-                <button class="btn btn-primary" id="visualSubmitBtn" disabled onclick="submitVisualSearch()">Search</button>
+                <button class="btn btn-outline-light me-2" onclick="closeVisualSearch()">Cancel</button>
+                <button class="btn btn-primary" id="visualSubmitBtn" disabled onclick="submitVisualSearch()">Search Catalog</button>
             </div>
         </div>
     </div>
@@ -85,7 +99,10 @@
         const previewPlaceholder = document.getElementById('previewPlaceholder');
         const visualSubmitBtn = document.getElementById('visualSubmitBtn');
         const resultsGrid = document.getElementById('resultsGrid');
-        const visualStatus = document.getElementById('visualStatus');
+        const visualResults = document.getElementById('visualResults');
+        const visualLoading = document.getElementById('visualLoading');
+        const visualPrediction = document.getElementById('visualPrediction');
+        const aiExplanation = document.getElementById('aiExplanation');
 
         let chatHistory = [];
 
@@ -153,8 +170,8 @@
             previewImg.style.display = 'none';
             previewPlaceholder.style.display = 'block';
             visualSubmitBtn.disabled = true;
-            resultsGrid.innerHTML = '';
-            visualStatus.textContent = '';
+            visualResults.style.display = 'none';
+            visualLoading.style.display = 'none';
             fileInput.value = '';
         }
 
@@ -175,23 +192,37 @@
         async function submitVisualSearch() {
             const formData = new FormData();
             formData.append('image', fileInput.files[0]);
-            visualStatus.textContent = 'Analyzing image...';
+            
+            visualLoading.style.display = 'block';
+            visualResults.style.display = 'none';
             visualSubmitBtn.disabled = true;
-            resultsGrid.innerHTML = '';
 
             try {
                 const resp = await fetch('/api/search', { method: 'POST', body: formData });
                 const data = await resp.json();
-                visualStatus.textContent = data.ok ? `Category: ${data.pred_class}` : 'Error occurred';
+                visualLoading.style.display = 'none';
+                
                 if (data.ok) {
+                    visualResults.style.display = 'block';
+                    visualPrediction.textContent = data.prediction;
+                    aiExplanation.innerHTML = marked.parse(data.ai_text);
+                    
+                    resultsGrid.innerHTML = '';
                     data.results.forEach(r => {
                         const item = document.createElement('div');
                         item.className = 'result-item';
-                        item.innerHTML = `<img src="${r.image_url}"><div>${r.Product_Title}</div><div class="text-primary">Score: ${r.similarity_score.toFixed(3)}</div>`;
+                        // Gradio gallery data is usually [ {image: {path: ...}, caption: ...}, ... ]
+                        const imgPath = r.image.path || r.image.url;
+                        item.innerHTML = `<img src="${imgPath}"><div>${r.caption}</div>`;
                         resultsGrid.appendChild(item);
                     });
+                } else {
+                    alert("Search failed: " + data.error);
                 }
-            } catch (e) { visualStatus.textContent = 'Search failed.'; }
+            } catch (e) { 
+                visualLoading.style.display = 'none';
+                alert('Search failed. Please check your HF_API_URL.'); 
+            }
             visualSubmitBtn.disabled = false;
         }
     </script>
