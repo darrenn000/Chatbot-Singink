@@ -211,10 +211,31 @@
                     data.results.forEach(r => {
                         const item = document.createElement('div');
                         item.className = 'result-item';
-                        // Gradio gallery data is usually [ {image: {path: ...}, caption: ...}, ... ]
-                        const imgPath = r.image.path || r.image.url;
-                        item.innerHTML = `<img src="${imgPath}"><div>${r.caption}</div>`;
-                        resultsGrid.appendChild(item);
+                        
+                        // Handle different Gradio gallery formats
+                        let imgUrl = "";
+                        let caption = "";
+                        
+                        if (typeof r === 'object') {
+                            // Format: { image: { path: ... }, caption: ... }
+                            if (r.image && (r.image.url || r.image.path)) {
+                                imgUrl = r.image.url || r.image.path;
+                            } 
+                            // Format: [ image_url, caption ]
+                            else if (Array.isArray(r)) {
+                                imgUrl = r[0];
+                                caption = r[1];
+                            }
+                            caption = r.caption || caption || "";
+                        } else if (Array.isArray(r)) {
+                            imgUrl = r[0];
+                            caption = r[1];
+                        }
+
+                        if (imgUrl) {
+                            item.innerHTML = `<img src="${imgUrl}"><div>${caption}</div>`;
+                            resultsGrid.appendChild(item);
+                        }
                     });
                 } else {
                     alert("Search failed: " + data.error);

@@ -28,9 +28,12 @@ class VisualSearchClient:
             # Call the 'run_search' function in the Gradio app
             # Based on SM4-main/app.py, the function is 'run_search'
             # We use handle_file for local paths
+            # The API name in the provided SM4 app.py is actually 'predict' 
+            # because it's the default for gr.Interface, or it might not have an explicit name.
+            # We'll try calling it by index (0) or the most likely name.
             result = self.client.predict(
-                img=handle_file(image_path),
-                api_name="/run_search"
+                handle_file(image_path),
+                api_name="/predict"
             )
             
             # Gradio returns: (img, prediction_text, gallery_data, ai_text)
