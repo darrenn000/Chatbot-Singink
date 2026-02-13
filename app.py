@@ -5,7 +5,7 @@ from datetime import datetime
 
 from config import Config
 from classifier import IntentClassifier
-from model_deployment.visual_search import VisualSearchClient
+from visual_search import VisualSearchClient
 from recommender import PrinterRecommender
 
 app = Flask(__name__)
