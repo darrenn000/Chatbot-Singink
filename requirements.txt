@@ -6,6 +6,3 @@ numpy
 pandas
 google-generativeai
 python-dotenv
-requests
-gradio_client
-pillow
