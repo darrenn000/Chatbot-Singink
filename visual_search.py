@@ -25,29 +25,25 @@ class VisualSearchClient:
             return {"ok": False, "error": "Visual search client not initialized."}
 
         try:
-            # We try the most common Gradio API names for gr.Interface
-            # 1. Try '/predict'
-            # 2. If that fails, the client will automatically try the default function
+            # Call the 'run_search' function in the Gradio app
+            # Based on SM4-main/app.py, the function is 'run_search'
+            # We use handle_file for local paths
+            # The API name in the provided SM4 app.py is actually 'predict' 
+            # because it's the default for gr.Interface, or it might not have an explicit name.
+            # We'll try calling it by index (0) or the most likely name.
             result = self.client.predict(
                 handle_file(image_path),
-                api_name="/predict" 
+                api_name="/predict"
             )
             
+            # Gradio returns: (img, prediction_text, gallery_data, ai_text)
+            # We need to parse this for our UI
             return {
                 "ok": True,
                 "prediction": result[1],
-                "gallery": result[2],
+                "gallery": result[2], # List of (image_path, caption)
                 "ai_text": result[3]
             }
         except Exception as e:
-            # Fallback: Try without an explicit api_name if /predict fails
-            try:
-                result = self.client.predict(handle_file(image_path))
-                return {
-                    "ok": True,
-                    "prediction": result[1],
-                    "gallery": result[2],
-                    "ai_text": result[3]
-                }
-            except Exception as e2:
-                return {"ok": False, "error": f"Gradio Error: {str(e2)}"}
+            print(f"Visual search error: {e}")
+            return {"ok": False, "error": str(e)}
