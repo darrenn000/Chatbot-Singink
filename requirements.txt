@@ -6,3 +6,4 @@ numpy
 pandas
 google-generativeai
 python-dotenv
+gradio_client>=1.0.0
