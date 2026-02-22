@@ -15,11 +15,11 @@
             --user-msg-bg: #007bff;
         }
         body { background-color: var(--bg-color); height: 100vh; display: flex; flex-direction: column; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .navbar { box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .navbar { box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px 0; min-height: 72px;}
         .chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: smooth; }
         .welcome-card{ background:#f8f9fb; border:1px solid #e5e7eb; border-radius:16px; padding:14px 18px; max-width:460px; box-shadow:0 2px 6px rgba(0,0,0,.04);margin-top:16px; margin-left:6px}
-       
         .chat-container .welcome-card{ margin-top:14px;}
+        .chat-container.empty-state{justify-content:center;}
         .mode-badge{ cursor:pointer; transition:.15s ease; }
         .mode-badge:hover{ background:#e9f2ff !important; border-color:#cfe0ff;}
 
@@ -62,14 +62,25 @@
         .sm3-muted { font-size: 0.85rem; color: #666; margin-top: 8px; }
         .sm3-section-title { font-weight: 700; margin-top: 14px; }
         .sm3-small { font-size: 0.85rem; color: #555; }
+
+        /* Quick suggestion chips */
+        .qs-chip{border:1px solid #e5e7eb;background:#f8f9fb;border-radius:20px;padding:6px 10px;font-size:.85rem;line-height:1;cursor:pointer;transition:.15s ease;white-space:nowrap;}
+        .qs-chip:hover{background:#e9f2ff;border-color:#cfe0ff;transform:translateY(-1px); box-shadow:0 2px 6px rgba(0,0,0,.08);}
+        .qs-chip:active{transform:translateY(0);}.qs-wrap{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:10px;align-items:center;scrollbar-width:thin;}
+        .qs-wrap::-webkit-scrollbar{height:6px; margin-bottom:6px; margin-top:-6px;}
+        #quickSuggestions, #quickSuggestionsLabel {transition: opacity .15s ease;}
+        #qsBlock { overflow: hidden; transition: max-height .18s ease, opacity .15s ease, margin .18s ease; max-height: 120px; opacity: 1; margin-bottom: 10px; }
+        #qsBlock.qs-hidden { max-height: 0; opacity: 0; margin-bottom: 0; }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-dark bg-primary">
-        <div class="container">
-            <span class="navbar-brand mb-0 h1"><i class="bi bi-printer-fill me-2"></i>Printer Expert Assistant</span>
-        </div>
-    </nav>
+<nav class="navbar navbar-dark bg-primary">
+  <div class="container position-relative">
+    <span class="navbar-brand mb-0 h1 position-absolute top-100 start-50 translate-middle">
+      <i class="bi bi-printer-fill me-2"></i>Printer Expert Assistant
+    </span>
+  </div>
+</nav>
 
 <div class="chat-container" id="chatContainer">
   <div class="message bot-message welcome-card">
@@ -82,7 +93,7 @@
       <span class="badge text-bg-light border mode-badge" onclick="triggerSM3()">🧠 Analyze reviews</span>
 
       <div class="sm4-muted" style="margin-top:10px;font-size:.8rem;">
-        Or type what you need (e.g., “cheap Wi-Fi duplex printer”).
+        Or type what you need (e.g., “Recommend cheap Wi-Fi duplex printers”).
       </div>
     </div>
   </div>
@@ -97,10 +108,21 @@
             <span class="dot"></span>
             <span class="dot"></span>
         </div>
-    </div>
 
     <div class="input-area">
-        <div class="container">
+        <div id="qsBlock">
+        <div id="quickSuggestionsLabel" class="sm4-muted" style="font-size:.8rem;margin-bottom:4px;">
+            Quick suggestions:
+        </div>
+
+        <div id="quickSuggestions" class="qs-wrap">
+            <button class="qs-chip" type="button" data-text="Recommend a cheap Wi-Fi duplex printer under $200">Recommend cheap Wi-Fi duplex printers</button>
+            <button class="qs-chip" type="button" data-text="What printer is best for home use with low ink cost?">Printers with lowest ink cost</button>
+            <button class="qs-chip" type="button" data-text="Compare Brother DCP-T830DW vs Epson EcoTank L8050">Compare printer models</button>
+            <button class="qs-chip" type="button" data-text="Do you have A4 photo printers?">A4 photo printers</button>
+            <button class="qs-chip" type="button" data-text="What toner should I buy for my HP printer?">Toner help</button>
+        </div>
+        </div>
             <div class="input-group">
                 <!-- SM4 image picker (hidden) -->
                 <input type="file" id="sm4File" accept="image/*" style="display:none" />
@@ -281,6 +303,7 @@ Wi-Fi keeps disconnecting..."></textarea>
                 const errorDiv = createMessageElement('bot');
                 errorDiv.textContent = "Connection error. Please check your status.";
             }
+            // hideSuggestionsOnceUsed()
         }
 
         function renderSm4Result(botDiv, data) {
@@ -324,6 +347,7 @@ Wi-Fi keeps disconnecting..."></textarea>
             }
 
             botDiv.innerHTML = html;
+            updateQuickSuggestionsForSM4(data);
         }
 
         function renderTable(headers, rows) {
@@ -690,6 +714,80 @@ Wi-Fi keeps disconnecting..."></textarea>
         function triggerSM3(){
             document.getElementById("sm3Btn").click();
         }
+
+        // Quick Suggestions: click to fill input (Shift-click to send immediately)
+        document.addEventListener("click", (e) => {
+        const chip = e.target.closest(".qs-chip");
+        if (!chip) return;
+
+        const text = (chip.getAttribute("data-text") || chip.textContent || "").trim();
+        if (!text) return;
+
+        userInput.value = text;
+        userInput.focus();
+        // syncQuickSuggestionsVisibility();
+
+        // Optional: Shift+click sends immediately
+        if (e.shiftKey) sendMessage();
+        });
+        function setQuickSuggestions(items) {
+            const wrap = document.getElementById("quickSuggestions");
+            if (!wrap) return;
+            wrap.innerHTML = "";
+            for (const it of items.slice(0, 6)) {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "qs-chip";
+                btn.setAttribute("data-text", it.text);
+                btn.textContent = it.label;
+                wrap.appendChild(btn);
+        }
+}
+// Example: update suggestions based on SM4 results (top matches)
+        function updateQuickSuggestionsForSM4(data) {
+        const results = Array.isArray(data?.results) ? data.results : [];
+        const topTitles = results.slice(0, 2).map(r => (r.Product_Title || "").split("\n")[0].trim()).filter(Boolean);
+
+        const items = [
+            { label: "Cheapest match?", text: "Which of these matches is the cheapest? Show prices." },
+            { label: "Best for home", text: "Which match is best for home use and low running cost?" },
+        ];
+
+        if (topTitles.length === 2) {
+            items.unshift({ label: "Compare top 2", text: `Compare ${topTitles[0]} vs ${topTitles[1]} for features and value.` });
+        }
+
+        setQuickSuggestions(items);
+        }
+        function hideSuggestionsOnceUsed(){
+            const wrap = document.getElementById("quickSuggestions");
+            if (wrap) wrap.style.display = "none";
+}
+// Sync quick suggestions visibility based on input content
+// Quick suggestions show ONLY when input is focused AND empty
+const qsBlock = document.getElementById("qsBlock");
+if (qsBlock) {
+  qsBlock.addEventListener("mousedown", (e) => {
+    e.preventDefault(); // keeps focus on input while clicking chips
+  });
+}
+function syncQuickSuggestionsVisibility() {
+  if (!qsBlock) return;
+
+  const isFocused = document.activeElement === userInput;
+  const hasText = userInput.value.trim().length > 0;
+
+  // show only when focused and empty
+  const hide = !isFocused || hasText;
+
+  qsBlock.classList.toggle("qs-hidden", hide);
+}
+
+userInput.addEventListener("focus", syncQuickSuggestionsVisibility);
+userInput.addEventListener("blur", syncQuickSuggestionsVisibility);
+userInput.addEventListener("input", syncQuickSuggestionsVisibility);
+
+syncQuickSuggestionsVisibility();
     </script>
 </body>
 </html>

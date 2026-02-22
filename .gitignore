@@ -18,3 +18,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Static files
+*static/sm4_thumbs/*
+*static/uploads/*
