@@ -10,6 +10,8 @@ from gradio_client import Client, handle_file
 import tempfile
 from datetime import datetime
 from werkzeug.utils import secure_filename
+import shutil
+import uuid
 
 # Load environment variables from .env file if it exists
 load_dotenv()
@@ -491,7 +493,7 @@ def generate_streaming_response(user_input, predicted_attributes, chat_history):
         "3) If you cannot find an exact model name in candidates, say so and offer the closest matches from candidates.\n"
         "4) Keep the response concise.\n\n"
         "INTENT BEHAVIOR:\n"
-        "- product_search: If key info is missing (budget OR must-have features), ask exactly ONE short follow-up question.\n"
+        "- product_search: If key info is missing (budget, must-have features), ask exactly ONE short follow-up question.\n"
         "  Otherwise recommend exactly 2 printers from candidates.\n"
         "- price_check: Recommend exactly 2 printers from candidates and include price for each (if available). Do NOT ask budget.\n"
         "- product_information: If a specific model name is mentioned but not present in candidates, say it's not found and show 2 closest matches.\n"
@@ -502,8 +504,14 @@ def generate_streaming_response(user_input, predicted_attributes, chat_history):
         "OUTPUT FORMAT:\n"
         "- If asking a question: output ONLY the single question.\n"
         "- If recommending: for each product include:\n"
+        "#### {Product_Title}\n"
         "  ![Product Image](IMAGE_URL)\n"
-        "  One short sentence why it matches.\n"
+        "**Price:** ${Price}\n\n"
+        "  **Why it matches:** One short sentence.\n\n"
+        "  **Key Specifications:**\n"
+        "  - Spec 1\n"
+        "  - Spec 2\n"
+        "  - Spec 3\n"
     )
 
     payload = {
@@ -755,7 +763,29 @@ def api_sm3():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # =====================================================================================
+def slugify(s: str) -> str:
+    s = (s or "").lower()
+    s = re.sub(r"\n.*$", "", s)           # remove score line
+    s = re.sub(r"[^a-z0-9]+", "_", s)     # keep alnum, replace others with _
+    s = s.strip("_")
+    return s
 
+STATIC_IMAGE_DIR = os.path.join(BASE_DIR, "static", "image")
+
+def build_static_image_index():
+    idx = {}
+    if not os.path.isdir(STATIC_IMAGE_DIR):
+        return idx
+    for fn in os.listdir(STATIC_IMAGE_DIR):
+        base, ext = os.path.splitext(fn)
+        if ext.lower() not in [".png", ".jpg", ".jpeg", ".webp"]:
+            continue
+        idx[base.lower()] = fn
+    return idx
+
+STATIC_IMAGE_INDEX = build_static_image_index()
+SM4_THUMBS_DIR = os.path.join(BASE_DIR, "static", "sm4_thumbs")
+os.makedirs(SM4_THUMBS_DIR, exist_ok=True)
 # SM4 Search API route 
 @app.route("/api/search", methods=["POST"])
 def api_search():
@@ -794,11 +824,26 @@ def api_search():
 
         results_list = []
         for i, item in enumerate(gallery, start=1):
-            image_obj = item.get("image") if isinstance(item, dict) else None
             caption = item.get("caption") if isinstance(item, dict) else None
+            image_obj = item.get("image") if isinstance(item, dict) else None
 
-            image_url = image_obj.get("url") if isinstance(image_obj, dict) else None
-            image_path = image_obj.get("path") if isinstance(image_obj, dict) else None
+            image_url = None
+            image_path = None
+
+            # SM4 returns a local path string like C:\Users\...\Temp\gradio\...\image.webp
+            if isinstance(image_obj, str):
+                image_path = image_obj
+
+                # If it exists, copy it into static so the browser can load it
+                if os.path.exists(image_path):
+                    ext = os.path.splitext(image_path)[1] or ".webp"
+                    out_name = f"sm4_{uuid.uuid4().hex}{ext}"
+                    out_path = os.path.join(SM4_THUMBS_DIR, out_name)
+
+                    shutil.copyfile(image_path, out_path)
+
+                    # Browser-loadable URL
+                    image_url = f"/static/sm4_thumbs/{out_name}"
 
             results_list.append({
                 "Product_ID": f"hf_{i}",
