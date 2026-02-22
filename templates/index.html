@@ -17,6 +17,11 @@
         body { background-color: var(--bg-color); height: 100vh; display: flex; flex-direction: column; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .navbar { box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: smooth; }
+        .welcome-card{ background:#f8f9fb; border:1px solid #e5e7eb; border-radius:16px; padding:14px 18px; max-width:460px; box-shadow:0 2px 6px rgba(0,0,0,.04);margin-top:16px; margin-left:6px}
+       
+        .chat-container .welcome-card{ margin-top:14px;}
+        .mode-badge{ cursor:pointer; transition:.15s ease; }
+        .mode-badge:hover{ background:#e9f2ff !important; border-color:#cfe0ff;}
 
         .message { max-width: 85%; padding: 12px 18px; border-radius: 18px; position: relative; font-size: 0.95rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
         .user-message { align-self: flex-end; background-color: var(--user-msg-bg); color: white; border-bottom-right-radius: 4px; }
@@ -66,16 +71,26 @@
         </div>
     </nav>
 
-    <div class="chat-container" id="chatContainer">
-        <div class="message bot-message">
-            <div class="message-content">
-                Hello! I'm your Printer Expert. Tell me what you're looking for in a printer, and I'll find the best matches from our catalog!
-                <div class="sm4-muted mt-2">
-                    Tip: Click the image icon to run Visual Similarity Search (SM4).<br/>
-                    Tip: Click the note icon to analyze customer reviews (SM3 Sentiment + Gemini insights).
-                </div>
-            </div>
-        </div>
+<div class="chat-container" id="chatContainer">
+  <div class="message bot-message welcome-card">
+    <div class="message-content">
+      <div style="font-weight:600;margin-bottom:6px;">Find the right printer fast.</div>
+
+      <div class="sm4-muted" style="margin-bottom:10px;">Start by:</div>
+
+      <span class="badge text-bg-light border mode-badge" onclick="triggerSM4()">📷 Find similar printers</span>
+      <span class="badge text-bg-light border mode-badge" onclick="triggerSM3()">🧠 Analyze reviews</span>
+
+      <div class="sm4-muted" style="margin-top:10px;font-size:.8rem;">
+        Or type what you need (e.g., “cheap Wi-Fi duplex printer”).
+      </div>
+    </div>
+  </div>
+
+  <div id="typingIndicator" class="typing">
+    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+  </div>
+</div>
 
         <div id="typingIndicator" class="typing">
             <span class="dot"></span>
@@ -91,12 +106,12 @@
                 <input type="file" id="sm4File" accept="image/*" style="display:none" />
 
                 <!-- SM4 icon button -->
-                <button class="btn btn-outline-primary" type="button" id="sm4Btn" title="Visual search (SM4)">
+                <button class="btn btn-outline-primary" type="button" id="sm4Btn" title="Visual Search">
                     <i class="bi bi-image"></i>
                 </button>
 
                 <!-- SM3 icon button -->
-                <button class="btn btn-outline-primary" type="button" id="sm3Btn" title="Review sentiment (SM3)">
+                <button class="btn btn-outline-primary" type="button" id="sm3Btn" title="Review Insights">
                     <i class="bi bi-journal-text"></i>
                 </button>
 
@@ -667,6 +682,14 @@ Wi-Fi keeps disconnecting..."></textarea>
         sm3AnalyzeOnlyBtn.addEventListener('click', runSm3AnalyzeSaved);
         sm3ClearSavedBtn.addEventListener('click', runSm3ClearSaved);
         sm3ClearBtn.addEventListener('click', () => sm3Text.value = "");
+
+        function triggerSM4(){
+            document.getElementById("sm4Btn").click();
+        }
+
+        function triggerSM3(){
+            document.getElementById("sm3Btn").click();
+        }
     </script>
 </body>
 </html>

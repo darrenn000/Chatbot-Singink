@@ -525,7 +525,7 @@ def generate_streaming_response(user_input, predicted_attributes, chat_history):
             "temperature": 0.2,
             "top_p": 0.95,
             "top_k": 40,
-            "max_output_tokens": 250,
+            "max_output_tokens": 512,
         }
 
         gemini_model = genai.GenerativeModel(
