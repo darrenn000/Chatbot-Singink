@@ -27,9 +27,9 @@
         .message-content img { max-width: 100%; height: auto; border-radius: 10px; margin: 10px 0; display: block; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #eee; }
 
         .input-area { background: white; padding: 20px; border-top: 1px solid #dee2e6; }
-        .input-group { background: #f8f9fa; border-radius: 25px; padding: 5px 15px; border: 1px solid #ced4da; display: flex; align-items: center; }
+        .input-group { background: #f8f9fa; border-radius: 25px; padding: 5px 15px; border: 1px solid #ced4da; display: flex; align-items: center; gap: 8px; }
         .input-group input { border: none; background: transparent; padding: 10px; box-shadow: none !important; flex: 1; }
-        .input-group button { border-radius: 50% !important; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; margin-left: 8px; }
+        .input-group button { border-radius: 50% !important; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; }
 
         .typing { align-self: flex-start; background-color: var(--bot-msg-bg); padding: 12px 18px; border-radius: 18px; border-bottom-left-radius: 4px; display: none; }
         .dot { height: 8px; width: 8px; background-color: #bbb; border-radius: 50%; display: inline-block; margin-right: 3px; animation: jump 1.4s infinite ease-in-out both; }
@@ -46,6 +46,16 @@
         .sm4-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; }
         .sm4-caption { font-size: 0.85rem; color: #444; }
         .sm4-muted { font-size: 0.85rem; color: #666; }
+
+        /* SM3 result rendering */
+        .sm3-title { font-weight: 700; margin-bottom: 8px; }
+        .sm3-pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.85rem; margin-right: 6px; background: #f1f3f5; }
+        .sm3-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+        .sm3-table th, .sm3-table td { border: 1px solid #eee; padding: 8px; vertical-align: top; }
+        .sm3-table th { background: #fafafa; }
+        .sm3-muted { font-size: 0.85rem; color: #666; margin-top: 8px; }
+        .sm3-section-title { font-weight: 700; margin-top: 14px; }
+        .sm3-small { font-size: 0.85rem; color: #555; }
     </style>
 </head>
 <body>
@@ -60,7 +70,8 @@
             <div class="message-content">
                 Hello! I'm your Printer Expert. Tell me what you're looking for in a printer, and I'll find the best matches from our catalog!
                 <div class="sm4-muted mt-2">
-                    Tip: Click the image icon to run Visual Similarity Search (SM4).
+                    Tip: Click the image icon to run Visual Similarity Search (SM4).<br/>
+                    Tip: Click the note icon to analyze customer reviews (SM3 Sentiment + Gemini insights).
                 </div>
             </div>
         </div>
@@ -83,6 +94,11 @@
                     <i class="bi bi-image"></i>
                 </button>
 
+                <!-- SM3 icon button -->
+                <button class="btn btn-outline-primary" type="button" id="sm3Btn" title="Review sentiment (SM3)">
+                    <i class="bi bi-journal-text"></i>
+                </button>
+
                 <!-- Text input -->
                 <input type="text" id="userInput" class="form-control" placeholder="Ask about a printer..." autocomplete="off">
 
@@ -94,6 +110,57 @@
         </div>
     </div>
 
+    <!-- SM3 Modal -->
+    <div class="modal fade" id="sm3Modal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">SM3 — Customer Review Sentiment</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-2 text-muted" style="font-size:0.9rem;">
+              Choose a printer model, paste <b>one review per line</b>. Submitting adds to that model’s saved history.
+            </div>
+
+            <!-- NEW: printer selector -->
+            <div class="row g-2 align-items-center mb-2">
+              <div class="col-12 col-md-8">
+                <label class="form-label mb-1">Printer model</label>
+                <select id="sm3Printer" class="form-select">
+                  <option value="general">general</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label mb-1">Saved reviews</label>
+                <div class="form-control bg-light" id="sm3SavedCount">0</div>
+              </div>
+            </div>
+
+            <textarea id="sm3Text" class="form-control" rows="8" placeholder="Amazing print quality...
+Toner is too expensive...
+Wi-Fi keeps disconnecting..."></textarea>
+
+            <div class="d-flex gap-2 mt-3 flex-wrap">
+              <button class="btn btn-primary" id="sm3AnalyzeBtn">
+                <i class="bi bi-graph-up me-1"></i> Submit + Analyze
+              </button>
+              <button class="btn btn-outline-secondary" id="sm3AnalyzeOnlyBtn">
+                Analyze saved
+              </button>
+              <button class="btn btn-outline-danger" id="sm3ClearSavedBtn">
+                Clear saved for this printer
+              </button>
+              <button class="btn btn-outline-secondary" id="sm3ClearBtn">Clear textbox</button>
+            </div>
+
+            <div class="text-muted mt-2" id="sm3Status" style="font-size:0.85rem;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
@@ -103,6 +170,18 @@
         // SM4 controls
         const sm4Btn = document.getElementById('sm4Btn');
         const sm4File = document.getElementById('sm4File');
+
+        // SM3 controls
+        const sm3Btn = document.getElementById('sm3Btn');
+        const sm3Modal = new bootstrap.Modal(document.getElementById('sm3Modal'));
+        const sm3Text = document.getElementById('sm3Text');
+        const sm3AnalyzeBtn = document.getElementById('sm3AnalyzeBtn');
+        const sm3AnalyzeOnlyBtn = document.getElementById('sm3AnalyzeOnlyBtn');
+        const sm3ClearSavedBtn = document.getElementById('sm3ClearSavedBtn');
+        const sm3ClearBtn = document.getElementById('sm3ClearBtn');
+        const sm3Status = document.getElementById('sm3Status');
+        const sm3Printer = document.getElementById('sm3Printer');
+        const sm3SavedCount = document.getElementById('sm3SavedCount');
 
         let chatHistory = [];
 
@@ -147,7 +226,6 @@
 
                 if (!response.ok) throw new Error('Network response was not ok');
 
-                // Prepare for streaming
                 typingIndicator.style.display = 'none';
                 const botContentDiv = createMessageElement('bot');
                 let fullBotResponse = "";
@@ -232,6 +310,100 @@
             botDiv.innerHTML = html;
         }
 
+        function renderTable(headers, rows) {
+            let html = `<table class="sm3-table"><thead><tr>`;
+            for (const h of headers) html += `<th>${escapeHtml(h)}</th>`;
+            html += `</tr></thead><tbody>`;
+            for (const r of rows) {
+                html += `<tr>`;
+                for (const cell of r) html += `<td>${escapeHtml(cell)}</td>`;
+                html += `</tr>`;
+            }
+            html += `</tbody></table>`;
+            return html;
+        }
+
+        function renderSm3Result(botDiv, payload) {
+            const printerId = payload?.printer_id || "general";
+            const savedCount = payload?.saved_count ?? 0;
+
+            const overall = payload?.overall || "";
+            const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+            const love = Array.isArray(payload?.what_users_love) ? payload.what_users_love : [];
+            const concerns = Array.isArray(payload?.common_concerns) ? payload.common_concerns : [];
+            const features = Array.isArray(payload?.feature_ratings) ? payload.feature_ratings : [];
+            const insights = (payload?.insights || "").trim();
+
+            let html = `<div class="sm3-title">📝 SM3 — Review Sentiment (${escapeHtml(printerId)})</div>`;
+            html += `<div class="sm3-small">Saved reviews for this printer: <b>${escapeHtml(savedCount)}</b></div>`;
+
+            if (overall) {
+                html += `<div class="mt-2">${escapeHtml(overall)}</div>`;
+            }
+
+            // per-review summary pills
+            const pos = rows.filter(r => String(r.sentiment || "").toLowerCase() === "positive").length;
+            const neg = rows.filter(r => String(r.sentiment || "").toLowerCase() === "negative").length;
+            const total = rows.length;
+
+            if (total > 0) {
+                html += `
+                    <div class="mt-2">
+                        <span class="sm3-pill">Positive: ${pos} (${(pos/total*100).toFixed(1)}%)</span>
+                        <span class="sm3-pill">Negative: ${neg} (${(neg/total*100).toFixed(1)}%)</span>
+                        <span class="sm3-pill">Total: ${total}</span>
+                    </div>
+                `;
+            }
+
+            // What users love / concerns (theme tables)
+            if (love.length > 0) {
+                html += `<div class="sm3-section-title">What Users Love</div>`;
+                const trows = love.map(x => [x.theme, String(x["positive_%"]), String(x.mentions)]);
+                html += renderTable(["theme", "positive_%", "mentions"], trows);
+            }
+
+            if (concerns.length > 0) {
+                html += `<div class="sm3-section-title">Common Concerns</div>`;
+                const trows = concerns.map(x => [x.theme, String(x["negative_%"]), String(x.mentions)]);
+                html += renderTable(["theme", "negative_%", "mentions"], trows);
+            }
+
+            // Feature ratings
+            if (features.length > 0) {
+                html += `<div class="sm3-section-title">Feature Ratings (keyword-based)</div>`;
+                const frows = features.map(x => [
+                    x.feature,
+                    String(x.mentions),
+                    String(x["positive_%"]),
+                    String(x["negative_%"]),
+                    String(x.avg_conf),
+                    String(x.rating_1to5)
+                ]);
+                html += renderTable(["feature", "mentions", "positive_%", "negative_%", "avg_conf", "rating_1to5"], frows);
+            }
+
+            // Per-review table (first 20)
+            if (rows.length > 0) {
+                html += `<div class="sm3-section-title">Per review results</div>`;
+                const pr = rows.slice(0, 20).map(r => [r.review || "", r.sentiment || "", String(r.confidence ?? "")]);
+                html += renderTable(["review", "sentiment", "confidence"], pr);
+                if (rows.length > 20) {
+                    html += `<div class="sm3-muted">Showing first 20 rows. (${rows.length} total)</div>`;
+                }
+            } else {
+                html += `<div class="sm3-muted mt-2">No per-review rows returned.</div>`;
+            }
+
+            // optional insights (if your HF space returns something meaningful)
+            if (insights) {
+                html += `<div class="sm3-section-title">AI Insights</div>`;
+                html += `<div class="mt-2">${marked.parse(insights)}</div>`;
+            }
+
+            botDiv.innerHTML = html;
+        }
+
         function escapeHtml(str) {
             return String(str ?? "")
                 .replaceAll("&", "&amp;")
@@ -242,25 +414,22 @@
         }
 
         function escapeAttr(str) {
-            // minimal attribute escaping
             return escapeHtml(str).replaceAll("`", "&#096;");
         }
 
         async function sendImage(file) {
             if (!file) return;
 
-            // Render user image bubble (preview)
             const userDiv = createMessageElement('user');
             const previewUrl = URL.createObjectURL(file);
             userDiv.innerHTML = `<div><strong>📷 Image sent</strong></div><img src="${previewUrl}" alt="uploaded image" />`;
 
-            // Show typing indicator
             typingIndicator.style.display = 'block';
             scrollToBottom();
 
             try {
                 const form = new FormData();
-                form.append("image", file); // IMPORTANT: backend expects key "image"
+                form.append("image", file);
 
                 const res = await fetch('/api/search', {
                     method: 'POST',
@@ -286,8 +455,186 @@
                 const botDiv = createMessageElement('bot');
                 botDiv.textContent = "Error: " + err.message;
             } finally {
-                // release blob URL
                 try { URL.revokeObjectURL(previewUrl); } catch (_) {}
+            }
+        }
+
+        async function sm3RefreshStatus() {
+            const pid = (sm3Printer.value || "general").trim();
+            try {
+                const res = await fetch('/api/sm3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: "status", printer_id: pid })
+                });
+                const data = await res.json();
+                if (data?.ok) {
+                    sm3SavedCount.textContent = String(data.saved_count ?? 0);
+                }
+            } catch (_) {}
+        }
+
+        async function sm3LoadPrinters() {
+            try {
+                const res = await fetch('/api/printers');
+                const data = await res.json();
+                if (!data?.ok) return;
+                const items = Array.isArray(data.printers) ? data.printers : ["general"];
+
+                // rebuild options (keep current selection if possible)
+                const current = sm3Printer.value || "general";
+                sm3Printer.innerHTML = "";
+                for (const p of items) {
+                    const opt = document.createElement("option");
+                    opt.value = p;
+                    opt.textContent = p;
+                    sm3Printer.appendChild(opt);
+                }
+                sm3Printer.value = items.includes(current) ? current : "general";
+                await sm3RefreshStatus();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function runSm3SubmitAndAnalyze() {
+            const text = (sm3Text.value || "").trim();
+            if (!text) return;
+
+            const pid = (sm3Printer.value || "general").trim();
+
+            sm3Status.textContent = "Submitting + analyzing...";
+            sm3AnalyzeBtn.disabled = true;
+            sm3AnalyzeOnlyBtn.disabled = true;
+            sm3ClearSavedBtn.disabled = true;
+
+            // Show in chat as a user action (no huge wall)
+            const count = text.split('\n').filter(x=>x.trim()).length;
+            const userDiv = createMessageElement('user');
+            userDiv.innerHTML = `<div><strong>📝 Analyze reviews</strong></div>
+                                 <div class="sm3-muted">Printer: ${escapeHtml(pid)} · Added: ${count}</div>`;
+
+            typingIndicator.style.display = 'block';
+            scrollToBottom();
+
+            try {
+                const res = await fetch('/api/sm3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: "submit",
+                        printer_id: pid,
+                        reviews: text
+                    })
+                });
+
+                const data = await res.json();
+                typingIndicator.style.display = 'none';
+
+                const botDiv = createMessageElement('bot');
+
+                if (!res.ok || !data.ok) {
+                    botDiv.textContent = "SM3 error: " + (data?.error || "Unknown error");
+                } else {
+                    renderSm3Result(botDiv, data);
+                    sm3SavedCount.textContent = String(data.saved_count ?? 0);
+                }
+
+                scrollToBottom();
+                sm3Status.textContent = "";
+                sm3Modal.hide();
+
+            } catch (e) {
+                typingIndicator.style.display = 'none';
+                const botDiv = createMessageElement('bot');
+                botDiv.textContent = "SM3 connection error.";
+                sm3Status.textContent = "";
+            } finally {
+                sm3AnalyzeBtn.disabled = false;
+                sm3AnalyzeOnlyBtn.disabled = false;
+                sm3ClearSavedBtn.disabled = false;
+            }
+        }
+
+        async function runSm3AnalyzeSaved() {
+            const pid = (sm3Printer.value || "general").trim();
+
+            sm3Status.textContent = "Analyzing saved reviews...";
+            sm3AnalyzeBtn.disabled = true;
+            sm3AnalyzeOnlyBtn.disabled = true;
+            sm3ClearSavedBtn.disabled = true;
+
+            const userDiv = createMessageElement('user');
+            userDiv.innerHTML = `<div><strong>📝 Analyze saved reviews</strong></div>
+                                 <div class="sm3-muted">Printer: ${escapeHtml(pid)}</div>`;
+
+            typingIndicator.style.display = 'block';
+            scrollToBottom();
+
+            try {
+                const res = await fetch('/api/sm3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: "analyze",
+                        printer_id: pid
+                    })
+                });
+
+                const data = await res.json();
+                typingIndicator.style.display = 'none';
+
+                const botDiv = createMessageElement('bot');
+
+                if (!res.ok || !data.ok) {
+                    botDiv.textContent = "SM3 error: " + (data?.error || "Unknown error");
+                } else {
+                    renderSm3Result(botDiv, data);
+                    sm3SavedCount.textContent = String(data.saved_count ?? 0);
+                }
+
+                scrollToBottom();
+                sm3Status.textContent = "";
+                sm3Modal.hide();
+
+            } catch (e) {
+                typingIndicator.style.display = 'none';
+                const botDiv = createMessageElement('bot');
+                botDiv.textContent = "SM3 connection error.";
+                sm3Status.textContent = "";
+            } finally {
+                sm3AnalyzeBtn.disabled = false;
+                sm3AnalyzeOnlyBtn.disabled = false;
+                sm3ClearSavedBtn.disabled = false;
+            }
+        }
+
+        async function runSm3ClearSaved() {
+            const pid = (sm3Printer.value || "general").trim();
+            sm3Status.textContent = "Clearing saved reviews...";
+            sm3ClearSavedBtn.disabled = true;
+
+            try {
+                const res = await fetch('/api/sm3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: "clear",
+                        printer_id: pid
+                    })
+                });
+
+                const data = await res.json();
+                if (data?.ok) {
+                    sm3SavedCount.textContent = "0";
+                    sm3Status.textContent = `Cleared saved reviews for "${pid}".`;
+                } else {
+                    sm3Status.textContent = "Clear failed: " + (data?.error || "Unknown error");
+                }
+            } catch (e) {
+                sm3Status.textContent = "Clear failed: connection error.";
+            } finally {
+                sm3ClearSavedBtn.disabled = false;
             }
         }
 
@@ -299,14 +646,26 @@
 
         // SM4 icon triggers file picker
         sm4Btn.addEventListener('click', () => sm4File.click());
-
-        // When file chosen, send to SM4
         sm4File.addEventListener('change', (e) => {
             const file = e.target.files && e.target.files[0];
-            // reset so selecting same file again still triggers change
             e.target.value = "";
             if (file) sendImage(file);
         });
+
+        // SM3 modal open
+        sm3Btn.addEventListener('click', async () => {
+            sm3Status.textContent = "";
+            await sm3LoadPrinters();
+            sm3Modal.show();
+        });
+
+        sm3Printer.addEventListener('change', sm3RefreshStatus);
+
+        // SM3 modal buttons
+        sm3AnalyzeBtn.addEventListener('click', runSm3SubmitAndAnalyze);
+        sm3AnalyzeOnlyBtn.addEventListener('click', runSm3AnalyzeSaved);
+        sm3ClearSavedBtn.addEventListener('click', runSm3ClearSaved);
+        sm3ClearBtn.addEventListener('click', () => sm3Text.value = "");
     </script>
 </body>
 </html>
