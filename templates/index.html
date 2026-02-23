@@ -298,6 +298,25 @@ Wi-Fi keeps disconnecting..."></textarea>
             sm4Modal.show();
         }
 
+        function closeSm4StartThenConfirm(file) {
+        const startEl = document.getElementById("sm4StartModal");
+
+        // If start modal isn't open, just open confirm directly
+        if (!startEl || !startEl.classList.contains("show")) {
+            openSm4Confirm(file);
+            return;
+        }
+
+        // Wait for Bootstrap to finish closing before opening confirm
+        const onHidden = () => {
+            startEl.removeEventListener("hidden.bs.modal", onHidden);
+            openSm4Confirm(file);
+        };
+
+        startEl.addEventListener("hidden.bs.modal", onHidden, { once: true });
+        sm4StartModal.hide();
+        }
+
         // SM4 controls
         const sm4Modal = new bootstrap.Modal(document.getElementById('sm4Modal'));
         const sm4Preview = document.getElementById('sm4Preview');
@@ -805,8 +824,10 @@ Wi-Fi keeps disconnecting..."></textarea>
         sm4StartUploadBtn.addEventListener("click", () => {
         sm4PasteMode = false;
         if (sm4PasteHint) sm4PasteHint.style.display = "none";
+
+        const startEl = document.getElementById("sm4StartModal");
+        startEl.addEventListener("hidden.bs.modal", () => sm4File.click(), { once: true });
         sm4StartModal.hide();
-        sm4File.click(); // this will later trigger openSm4Confirm(file)
         });
 
         sm4StartPasteBtn.addEventListener("click", () => {
@@ -821,8 +842,12 @@ Wi-Fi keeps disconnecting..."></textarea>
             if (item.type && item.type.startsWith("image/")) {
             const file = item.getAsFile();
             if (file) {
-                // Instead of immediately sending, open confirm UI (next section)
-                openSm4Confirm(file);
+                sm4PasteMode = false;
+                if (sm4PasteHint) sm4PasteHint.style.display = "none";
+
+                // ✅ Close start modal first, then show confirm modal
+                closeSm4StartThenConfirm(file);
+
                 e.preventDefault();
                 return;
             }
