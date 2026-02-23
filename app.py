@@ -57,7 +57,8 @@ def get_sm4_client():
     if sm4_client is None:
         sm4_client = Client(SM4_SPACE_ID, hf_token=HF_TOKEN) if HF_TOKEN else Client(SM4_SPACE_ID)
     return sm4_client
-
+client = get_sm4_client()
+print(client.view_api())
 # =====================================================================================
 # ✅ SM3 (Your Sentiment Analysis Space) — Integration
 # Space: gracewidj/sm3-sentiment-analysis
@@ -786,7 +787,8 @@ def build_static_image_index():
 STATIC_IMAGE_INDEX = build_static_image_index()
 SM4_THUMBS_DIR = os.path.join(BASE_DIR, "static", "sm4_thumbs")
 os.makedirs(SM4_THUMBS_DIR, exist_ok=True)
-# SM4 Search API route 
+
+# SM4 Search API route
 @app.route("/api/search", methods=["POST"])
 def api_search():
     file = request.files.get("image")
@@ -804,7 +806,9 @@ def api_search():
 
     suffix = os.path.splitext(saved_name)[1] or ".png"
     tmp_path = None
+
     try:
+        # copy into a temp file for gradio_client
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp_path = tmp.name
 
@@ -812,67 +816,109 @@ def api_search():
             dst.write(src.read())
 
         client = get_sm4_client()
+
+        # =========================
+        # STEP 1 — SUBMIT
+        # =========================
         result = client.predict(
             img=handle_file(tmp_path),
-            api_name="/run_search"
+            api_name="/on_submit"
         )
 
-        query_img = result[0] or {}
-        pred_class = result[1] or ""
-        gallery = result[2] or []
-        explanation_md = result[3] or ""
+        # HF returns:
+        # [0] query image
+        # [1] predicted category text
+        # [2] selected product text
+        # [3] match label
+        # [4] query detected features
+        # [5] selected detected features (sometimes empty)
+        # [6] gallery
+        # [7] explanation
 
+        pred_text = result[1] or ""
+        best_match = result[2] or ""
+        match_label = result[3] or ""
+        query_features = result[4] or []
+        selected_features = result[5] or []
+        gallery = result[6] or []
+        explanation_md = result[7] or ""
+
+        # =========================
+        # STEP 2 — FORCE SELECTED DETAILS
+        # =========================
+        try:
+            sel = client.predict(api_name="/on_select")
+            if isinstance(sel, (list, tuple)) and len(sel) >= 3:
+                best_match = sel[0] or best_match
+                match_label = sel[1] or match_label
+                selected_features = sel[2] if sel[2] is not None else selected_features
+        except Exception as e:
+            print("[SM4] /on_select failed:", e)
+
+        # Extract predicted class
+        pred_class = pred_text.split(":")[-1].strip() if ":" in pred_text else pred_text.strip()
+
+        # =========================
+        # BUILD RESULTS
+        # =========================
         results_list = []
+
         for i, item in enumerate(gallery, start=1):
-            caption = item.get("caption") if isinstance(item, dict) else None
-            image_obj = item.get("image") if isinstance(item, dict) else None
-
-            image_url = None
+            caption = None
             image_path = None
+            image_url = None
 
-            # SM4 returns a local path string like C:\Users\...\Temp\gradio\...\image.webp
-            if isinstance(image_obj, str):
-                image_path = image_obj
+            if isinstance(item, dict):
+                caption = item.get("caption")
 
-                # If it exists, copy it into static so the browser can load it
-                if os.path.exists(image_path):
-                    ext = os.path.splitext(image_path)[1] or ".webp"
-                    out_name = f"sm4_{uuid.uuid4().hex}{ext}"
-                    out_path = os.path.join(SM4_THUMBS_DIR, out_name)
+                image_obj = item.get("image")
 
-                    shutil.copyfile(image_path, out_path)
+                if isinstance(image_obj, dict):
+                    image_path = image_obj.get("path")
+                elif isinstance(image_obj, str):
+                    image_path = image_obj
 
-                    # Browser-loadable URL
-                    image_url = f"/static/sm4_thumbs/{out_name}"
+            # copy image into static
+            if image_path and os.path.exists(image_path):
+                ext = os.path.splitext(image_path)[1] or ".webp"
+                out_name = f"sm4_{uuid.uuid4().hex}{ext}"
+                out_path = os.path.join(SM4_THUMBS_DIR, out_name)
+                shutil.copyfile(image_path, out_path)
+                image_url = f"/static/sm4_thumbs/{out_name}"
+
+            # =========================
+            # ONLY TOP RESULT GETS FEATURES
+            # =========================
+            item_features = selected_features if i == 1 else []
+            item_label = match_label if i == 1 else "Similar"
 
             results_list.append({
                 "Product_ID": f"hf_{i}",
                 "Product_Title": caption or f"Result {i}",
                 "image_url": image_url,
                 "image_path": image_path,
+                "match_label": item_label,
+                "detected_features": item_features,
                 "similarity_score": None,
-                "match_label": None,
                 "match_badge_class": None,
                 "ai_summary": ""
             })
-
-        top1_score = None
-        low_conf = False
-        query_desc = {"query_caption": "", "query_tags": []}
-        ai = {"overview": explanation_md, "detected_features": [], "item_summaries": {}}
 
         return jsonify({
             "ok": True,
             "query_image_url": f"/static/uploads/{saved_name}",
             "query_filename": saved_name,
             "pred_class": pred_class,
-            "ai_overview": ai.get("overview"),
-            "detected_features": ai.get("detected_features", []),
+            "ai_overview": explanation_md,
+            "detected_features": query_features,
+            "selected_features": selected_features,
+            "best_match": best_match,
+            "match_label": match_label,
             "results": results_list,
-            "top1_score": top1_score,
-            "low_confidence": low_conf,
-            "query_caption": query_desc.get("query_caption", ""),
-            "query_tags": query_desc.get("query_tags", []),
+            "top1_score": None,
+            "low_confidence": False,
+            "query_caption": "",
+            "query_tags": [],
         })
 
     except Exception as e:
